@@ -27,6 +27,11 @@ AM_PROG_CC_C_O
 AC_STDC_HEADERS
 AM_PROG_LIBTOOL
 
+dnl instruct libtool machinery that the package supports DLLs 
+AC_LIBTOOL_WIN32_DLL
+
+AC_CANONICAL_HOST
+
 GST_0_10_REQS=0.10.20
 GST_PBUTILS=0.10.30
 CLUTTER_REQS=1.2.0
@@ -74,13 +79,30 @@ PKG_CHECK_MODULES(GIO, gio-2.0 >= $GIO_REQUIRED)
 AC_SUBST(GIO_CFLAGS)
 AC_SUBST(GIO_LIBS)
 
-PKG_CHECK_MODULES(CLUTTER_X11, clutter-x11-1.0,
-    [AC_DEFINE(HAVE_X11, 1, [Define if Clutter X11 is available.])],
-    [])
+case "$host" in
+  *-*-mingw*|*-*-cygwin*)
+    PKG_CHECK_MODULES(CLUTTER_WIN32, clutter-win32-1.0,
+      [AC_DEFINE(HAVE_WIN32, 1, [Define if Clutter Win32 is available.])],
+      [])
+    ;;
+  *-*-darwin*)
+    PKG_CHECK_MODULES(CLUTTER_OSX, clutter-osx-1.0,
+      [AC_DEFINE(HAVE_OSX, 1, [Define if Clutter OSX is available.])],
+      [
+        PKG_CHECK_MODULES(CLUTTER_X11, clutter-x11-1.0,
+          [AC_DEFINE(HAVE_X11, 1, [Define if Clutter X11 is available.])],
+          [])
+      ])
+    ;;
+  *)
+    PKG_CHECK_MODULES(CLUTTER_X11, clutter-x11-1.0,
+      [AC_DEFINE(HAVE_X11, 1, [Define if Clutter X11 is available.])],
+      [])
+    ;;
+esac
 
 PKG_CHECK_MODULES(XTEST, xtst,
-    [AC_DEFINE(HAVE_XTEST, 1, [Define if XTest is available.])],
-    [])
+    [AC_DEFINE(HAVE_XTEST, 1, [Define if XTest is available.])], [true])
 AC_SUBST(XTEST_CFLAGS)
 AC_SUBST(XTEST_LIBS)
 

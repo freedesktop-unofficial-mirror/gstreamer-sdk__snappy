@@ -22,6 +22,7 @@
 
 #include <clutter-gst/clutter-gst.h>
 #include <gst/pbutils/pbutils.h>
+#include <string.h>
 
 #include "user_interface.h"
 #include "gst_engine.h"
@@ -50,6 +51,21 @@ typedef enum
 
 /* -------------------- static functions --------------------- */
 
+static void
+write_key_file_to_file (GKeyFile *keyfile, const char *path)
+{
+  gchar *data;
+  GError *error = NULL;
+
+  data = g_key_file_to_data (keyfile, NULL, NULL);
+  g_file_set_contents (path, data, strlen (data), &error);
+  if (error != NULL) {
+    g_warning ("Failed to write history file to %s: %s", path, error->message);
+    g_error_free (error);
+  }
+
+  g_free (data);
+}
 
 /*         Add URI to recently viewed list       */
 gboolean
@@ -57,10 +73,9 @@ add_uri_to_history (gchar * uri)
 {
   gboolean ret;
   const gchar *config_dir;
-  gchar *path, *data, *clean_uri;
+  gchar *path, *clean_uri;
   gchar **history_keys;
   gsize length;
-  FILE *file;
   GKeyFile *keyfile;
   GKeyFileFlags flags;
 
@@ -91,15 +106,21 @@ add_uri_to_history (gchar * uri)
       g_key_file_set_boolean (keyfile, "history", clean_uri, TRUE);
     }
 
+    /* g_get_real_time () is not available until glib 2.28.0 */
+#if GLIB_CHECK_VERSION (2, 28, 0)
     g_key_file_set_int64 (keyfile, "history", clean_uri, g_get_real_time ());
+#else
+    {
+      GTimeVal time;
+
+      g_get_current_time (&time);
+      g_key_file_set_int64 (keyfile, "history", clean_uri,
+          (gint64) time.tv_sec);
+    }
+#endif
 
     /* Save gkeyfile to a file  */
-    data = g_key_file_to_data (keyfile, NULL, NULL);
-    file = fopen (path, "w");
-    fputs (data, file);
-    fclose (file);
-
-    g_free (data);
+    write_key_file_to_file (keyfile, path);
     g_free (path);
 
     ret = TRUE;
@@ -118,8 +139,7 @@ add_uri_unfinished_playback (GstEngine * engine, gchar * uri, gint64 position)
   guint hash_key;
   gint64 duration;
   const gchar *config_dir;
-  gchar *path, *data, *key;
-  FILE *file;
+  gchar *path, *key;
   GKeyFile *keyfile;
   GKeyFileFlags flags;
 
@@ -147,12 +167,7 @@ add_uri_unfinished_playback (GstEngine * engine, gchar * uri, gint64 position)
   g_key_file_set_int64 (keyfile, "unfinished", key, position);
 
   /* Save gkeyfile to a file, if file doesn't exist it creates a new one */
-  data = g_key_file_to_data (keyfile, NULL, NULL);
-  file = fopen (path, "w");
-  fputs (data, file);
-  fclose (file);
-
-  g_free (data);
+  write_key_file_to_file (keyfile, path);
   g_free (path);
 
   return TRUE;
@@ -198,9 +213,10 @@ discover (GstEngine * engine, gchar * uri)
   gst_discoverer_stream_info_list_free (list);
 
   /* If it has any stream, get duration */
-  if (engine->has_video || engine->has_audio)
+  if (engine->has_video || engine->has_audio) {
     engine->media_duration = gst_discoverer_info_get_duration (info);
-
+    engine->out_point = engine->media_duration;
+  }
   // g_print ("Found video %d, audio %d\n", engine->has_video,
   //     engine->has_audio);
 
@@ -266,7 +282,7 @@ remove_uri_unfinished_playback (GstEngine * engine, gchar * uri)
   guint hash_key;
   const gchar *config_dir;
   gchar *path, *data, *key;
-  FILE *file;
+  GError *error = NULL;
   GKeyFile *keyfile;
   GKeyFileFlags flags;
 
@@ -285,9 +301,11 @@ remove_uri_unfinished_playback (GstEngine * engine, gchar * uri)
 
   /* Save gkeyfile to a file */
   data = g_key_file_to_data (keyfile, NULL, NULL);
-  file = fopen (path, "w");
-  fputs (data, file);
-  fclose (file);
+  g_file_set_contents (path, data, strlen (data), &error);
+  if (error != NULL) {
+    g_warning ("Failed to write history file to %s: %s", path, error->message);
+    g_error_free (error);
+  }
 
   g_free (data);
   g_free (path);
@@ -338,6 +356,10 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
       g_debug ("End-of-stream\n");
       /* When URI is finished remove from unfinished list */
       remove_uri_unfinished_playback (engine, engine->uri);
+
+      if (engine->loop)
+        engine_seek (engine, engine->in_point, TRUE);
+
       break;
     case GST_MESSAGE_ERROR:
     {
@@ -369,7 +391,7 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
           /* Check if URI was left unfinished, if so seek to last position */
           position = is_uri_unfinished_playback (engine, engine->uri);
           if (position != -1) {
-            engine_seek (engine, position);
+            engine_seek (engine, engine->in_point, TRUE);
           }
 
           if (!engine->secret)
@@ -387,6 +409,11 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
     case GST_MESSAGE_STEP_DONE:
     {
       engine->prev_done = TRUE;
+    }
+    case GST_MESSAGE_SEGMENT_DONE:
+    {
+      if (engine->loop)
+        engine_seek (engine, engine->in_point, TRUE);
     }
     default:
       break;
@@ -407,6 +434,11 @@ engine_init (GstEngine * engine, GstElement * sink)
   engine->has_started = FALSE;
   engine->has_video = FALSE;
   engine->has_audio = FALSE;
+  engine->loop = FALSE;
+  engine->secret = FALSE;
+
+  engine->in_point = 0;
+  engine->out_point = 0;
 
   engine->media_width = 600;
   engine->media_height = 400;
@@ -453,9 +485,9 @@ engine_load_uri (GstEngine * engine, gchar * uri)
 gboolean
 engine_open_uri (GstEngine * engine, gchar * uri)
 {
-  g_object_set (G_OBJECT (engine->player), "uri", uri, NULL);
   /* Need to set back to Ready state so Playbin2 loads uri */
   gst_element_set_state (engine->player, GST_STATE_READY);
+  g_object_set (G_OBJECT (engine->player), "uri", uri, NULL);
 
   return TRUE;
 }
@@ -475,11 +507,24 @@ engine_play (GstEngine * engine)
 
 /*            Seek engine to position            */
 gboolean
-engine_seek (GstEngine * engine, gint64 position)
+engine_seek (GstEngine * engine, gint64 position, gboolean current)
 {
   GstFormat fmt = GST_FORMAT_TIME;
 
-  gst_element_seek_simple (engine->player, fmt, GST_SEEK_FLAG_FLUSH, position);
+  if (current) {
+    if (position > engine->out_point) {
+      engine->in_point = 0;
+      engine->out_point = engine->media_duration;
+    }
+
+    gst_element_seek (engine->player, 1.0, fmt,
+        GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_SEGMENT | GST_SEEK_FLAG_ACCURATE,
+        GST_SEEK_TYPE_SET, position, GST_SEEK_TYPE_SET, engine->out_point);
+  } else {
+    gst_element_seek (engine->player, 1.0, fmt,
+        GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_SEGMENT | GST_SEEK_FLAG_ACCURATE,
+        GST_SEEK_TYPE_SET, engine->in_point, GST_SEEK_TYPE_SET, position);
+  }
 
   return TRUE;
 }
@@ -619,10 +664,14 @@ change_state (GstEngine * engine, gchar * state)
     gst_element_set_state (engine->player, GST_STATE_READY);
     engine->playing = FALSE;
     engine->media_duration = -1;
+    engine->in_point = 0;
+    engine->out_point = 0;
   } else if (!g_strcmp0 (state, "Null")) {
     gst_element_set_state (engine->player, GST_STATE_NULL);
     engine->playing = FALSE;
     engine->media_duration = -1;
+    engine->in_point = 0;
+    engine->out_point = 0;
   }
 
   return TRUE;
@@ -640,6 +689,7 @@ update_media_duration (GstEngine * engine)
           &engine->media_duration)) {
     if (engine->media_duration != -1 && fmt == GST_FORMAT_TIME) {
       success = TRUE;
+      engine->out_point = engine->media_duration;
     } else {
       g_debug ("Could not get media's duration\n");
       success = FALSE;

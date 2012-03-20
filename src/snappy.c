@@ -22,6 +22,10 @@
 
 #define VERSION "0.2"
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
@@ -29,7 +33,11 @@
 #include <clutter-gst/clutter-gst.h>
 
 #include "user_interface.h"
+
+#ifdef ENABLE_DBUS
 #include "dlna.h"
+#endif
+
 #include "gst_engine.h"
 #include "utils.h"
 
@@ -57,13 +65,16 @@ close_down (UserInterface * ui, GstEngine * engine)
 /*           Process command arguments           */
 gboolean
 process_args (int argc, char *argv[],
-    gchar * file_list[], gboolean * fullscreen, gboolean * secret, GOptionContext * context)
+    gchar * file_list[], gboolean * fullscreen, gboolean * secret,
+    gboolean * loop, GOptionContext * context)
 {
   gboolean recent = FALSE, version = FALSE;
   guint c, index, pos = 0;
   GOptionEntry entries[] = {
     {"fullscreen", 'f', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_NONE, fullscreen,
         "Fullscreen mode", NULL},
+    {"loop", 'l', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_NONE, loop,
+        "Looping mode", NULL},
     {"recent", 'r', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_NONE, &recent,
         "Show recently viewed", NULL},
     {"secret", 's', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_NONE, secret,
@@ -135,16 +146,19 @@ main (int argc, char *argv[])
 {
   UserInterface *ui = NULL;
   GstEngine *engine = NULL;
-  SnappyMP *mp_obj = NULL;
   ClutterActor *video_texture;
   GstElement *sink;
 
-  gboolean ok, fullscreen = FALSE, secret = FALSE;
+  gboolean ok, fullscreen = FALSE, loop = FALSE, secret = FALSE;
   gint ret = 0;
   guint c, index, pos = 0;
   gchar *fileuri, *uri;
   gchar *file_list[argc];
   GOptionContext *context;
+
+#ifdef ENABLE_DBUS
+  SnappyMP *mp_obj = NULL;
+#endif
 
   if (!g_thread_supported ())
     g_thread_init (NULL);
@@ -152,7 +166,8 @@ main (int argc, char *argv[])
   context = g_option_context_new ("<media file> - Play movie files");
 
   /* Process command arguments */
-  ok = process_args (argc, argv, file_list, &fullscreen, &secret, context);
+  ok = process_args (argc, argv, file_list, &fullscreen, &secret, &loop,
+      context);
   if (!ok)
     goto quit;
 
@@ -166,13 +181,13 @@ main (int argc, char *argv[])
 
   /* Gstreamer engine */
   engine = g_new (GstEngine, 1);
-  engine->secret = secret;
-
   sink = clutter_gst_video_sink_new (CLUTTER_TEXTURE (video_texture));
-
   ok = engine_init (engine, sink);
   if (!ok)
     goto quit;
+
+  engine->secret = secret;
+  engine->loop = loop;
 
   ui->engine = engine;
   ui->texture = video_texture;
@@ -196,18 +211,22 @@ main (int argc, char *argv[])
   change_state (engine, "Paused");
   change_state (engine, "Playing");
 
+#ifdef ENABLE_DBUS
   /* Start MPRIS Dbus object */
   mp_obj = g_new (SnappyMP, 1);
   mp_obj->engine = engine;
   mp_obj->ui = ui;
   load_dlna (mp_obj);
+#endif
 
   /* Main loop */
   clutter_main ();
 
   /* Close snappy */
   close_down (ui, engine);
+#ifdef ENABLE_DBUS
   close_dlna (mp_obj);
+#endif
 
 quit:
   g_option_context_free (context);

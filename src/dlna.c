@@ -20,6 +20,12 @@
  * USA
  */
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
+#ifdef ENABLE_DBUS
+
 #include <gio/gio.h>
 #include <stdlib.h>
 
@@ -216,6 +222,7 @@ my_object_change_uri (SnappyMP * myobj, gchar * uri)
 
   engine_open_uri (myobj->engine, uri);
   interface_load_uri (myobj->ui, uri);
+  engine_play (myobj->engine);
 }
 
 static void
@@ -292,7 +299,7 @@ handle_method_call (GDBusConnection * connection,
     relative = offset / 100000000.0;
     position = myobj->engine->media_duration * relative;
     // g_print ("offset: %ld    relative: %f", offset, relative);
-    engine_seek (myobj->engine, position);
+    engine_seek (myobj->engine, position, TRUE);
 
     handle_result (invocation, ret, error);
 
@@ -323,8 +330,7 @@ handle_get_property (GDBusConnection * connection,
   } else if (g_strcmp0 (property_name, "Shuffle") == 0) {
     ret = g_variant_new_boolean (FALSE);
   } else if (g_strcmp0 (property_name, "Metadata") == 0) {
-    const char *strv[] = { "", NULL };
-    ret = g_variant_new_strv (strv, -1);
+    ret = g_variant_new_array (G_VARIANT_TYPE_VARDICT, NULL, 0);
   } else if (g_strcmp0 (property_name, "Volume") == 0) {
     ret = g_variant_new_double (0);
   } else if (g_strcmp0 (property_name, "Position") == 0) {
@@ -573,3 +579,5 @@ close_dlna (SnappyMP * mp)
 
   return TRUE;
 }
+
+#endif

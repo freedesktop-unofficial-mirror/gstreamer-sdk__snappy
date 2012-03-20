@@ -1,0 +1,47 @@
+layout management of snappy's clutter controls
+----------------------------------------------
+
+ui->control_box (fixed alignment bin)
+[
+	ui->control_bg
+	main_box (horizontal alignment box)
+	[
+		ui->control_play_toggle
+		info_box (vertical alignment box)
+		[
+			ui->control_title
+			seek_box (fixed alignment bin)
+			[
+				ui->in_point
+				ui->control_seek1
+				ui->control_seek2
+				ui->control_seekbar
+				ui->out_point
+			]
+
+			bottom_box (horizontal alignment box)
+			[
+				volume_box (horizontal alignment box)
+				[
+					ui->volume_low
+					volume_intensity (fixed alignment bin)
+					[
+						ui->vol_int
+						ui->vol_int_bg
+					]
+
+					ui->volume_high
+				]
+
+				ui->control_pos
+			]
+		]
+	]
+]
+
+
+
+
+
+for more information read:
+http://docs.clutter-project.org/docs/clutter-cookbook/stable/layouts.html
