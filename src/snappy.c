@@ -66,7 +66,7 @@ close_down (UserInterface * ui, GstEngine * engine)
 gboolean
 process_args (int argc, char *argv[],
     gchar * file_list[], gboolean * fullscreen, gboolean * secret,
-    gboolean * loop, GOptionContext * context)
+    gchar ** suburi, gboolean * loop, GOptionContext * context)
 {
   gboolean recent = FALSE, version = FALSE;
   guint c, index, pos = 0;
@@ -79,6 +79,8 @@ process_args (int argc, char *argv[],
         "Show recently viewed", NULL},
     {"secret", 's', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_NONE, secret,
         "Views not saved in recently viewed history", NULL},
+    {"subtitles", 't', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_FILENAME,
+        suburi, "Use this subtitle file", NULL},
     {"version", 'v', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_NONE, &version,
         "Shows snappy's version", NULL},
     {NULL}
@@ -152,8 +154,9 @@ main (int argc, char *argv[])
   gboolean ok, fullscreen = FALSE, loop = FALSE, secret = FALSE;
   gint ret = 0;
   guint c, index, pos = 0;
-  gchar *fileuri, *uri;
+  gchar *uri;
   gchar *file_list[argc];
+  gchar *suburi = NULL;
   GOptionContext *context;
 
 #ifdef ENABLE_DBUS
@@ -166,8 +169,8 @@ main (int argc, char *argv[])
   context = g_option_context_new ("<media file> - Play movie files");
 
   /* Process command arguments */
-  ok = process_args (argc, argv, file_list, &fullscreen, &secret, &loop,
-      context);
+  ok = process_args (argc, argv, file_list, &fullscreen, &secret, &suburi,
+      &loop, context);
   if (!ok)
     goto quit;
 
@@ -181,7 +184,10 @@ main (int argc, char *argv[])
 
   /* Gstreamer engine */
   engine = g_new (GstEngine, 1);
-  sink = clutter_gst_video_sink_new (CLUTTER_TEXTURE (video_texture));
+  sink = gst_element_factory_make ("cluttersink", "cluttersink");
+  g_object_set (G_OBJECT (sink), "texture", CLUTTER_TEXTURE (video_texture),
+      NULL);
+
   ok = engine_init (engine, sink);
   if (!ok)
     goto quit;
@@ -196,16 +202,17 @@ main (int argc, char *argv[])
   gst_object_unref (engine->bus);
 
   /* Get uri to load */
-  if (gst_uri_is_valid (file_list[0]))
-    uri = g_strdup (file_list[0]);
-  else {
-    fileuri = clean_uri (file_list[0]);
-    uri = g_strdup_printf ("file://%s", fileuri);
-  }
+  uri = clean_uri (file_list[0]);
 
   /* Load engine and start interface */
   engine_load_uri (engine, uri);
   interface_start (ui, uri);
+
+  /* Load subtitle file if available */
+  if (suburi != NULL) {
+    suburi = clean_uri (suburi);
+    set_subtitle_uri (engine, suburi);
+  }
 
   /* Start playing */
   change_state (engine, "Paused");

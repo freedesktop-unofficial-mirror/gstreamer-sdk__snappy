@@ -79,13 +79,14 @@ struct _UserInterface
   guint media_width, media_height;
   guint stage_width, stage_height;
   gfloat seek_width, seek_height;
-  gfloat in_point_pos, out_point_pos;
   gfloat volume_width, volume_height;
 
   gchar *filename, *fileuri;
   gchar *play_png, *pause_png;
   gchar *segment_png;
   gchar *volume_low_png, *volume_high_png;
+  gchar *subtitle_toggle_png;
+  gchar *video_stream_toggle_png, *audio_stream_toggle_png;
   gchar *duration_str;
 
   ClutterColor stage_color, control_color1, control_color2;
@@ -95,10 +96,11 @@ struct _UserInterface
   ClutterActor *control_box;
   ClutterActor *control_bg, *control_title, *control_play_toggle;
   ClutterActor *control_seek1, *control_seek2, *control_seekbar;
-  ClutterActor *in_point, *out_point;
   ClutterActor *control_pos;
   ClutterActor *volume_box;
   ClutterActor *volume_low, *volume_high;
+  ClutterActor *subtitle_toggle;
+  ClutterActor *video_stream_toggle, *audio_stream_toggle;
   ClutterActor *vol_int, *vol_int_bg, *volume_point;
   ClutterActor *info_box;
   ClutterActor *main_box;

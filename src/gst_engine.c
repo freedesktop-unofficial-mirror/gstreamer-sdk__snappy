@@ -49,10 +49,19 @@ typedef enum
   GST_PLAY_FLAG_BUFFERING = 0x000000100
 } GstPlayFlags;
 
+// Declaration of static functions
+static void write_key_file_to_file (GKeyFile * keyfile, const char *path);
+gboolean add_uri_to_history (gchar * uri);
+gboolean add_uri_unfinished_playback (GstEngine * engine, gchar * uri,
+    gint64 position);
+gboolean discover (GstEngine * engine, gchar * uri);
+gint64 is_uri_unfinished_playback (GstEngine * engine, gchar * uri);
+gboolean remove_uri_unfinished_playback (GstEngine * engine, gchar * uri);
+
 /* -------------------- static functions --------------------- */
 
 static void
-write_key_file_to_file (GKeyFile *keyfile, const char *path)
+write_key_file_to_file (GKeyFile * keyfile, const char *path)
 {
   gchar *data;
   GError *error = NULL;
@@ -213,12 +222,10 @@ discover (GstEngine * engine, gchar * uri)
   gst_discoverer_stream_info_list_free (list);
 
   /* If it has any stream, get duration */
-  if (engine->has_video || engine->has_audio) {
+  if (engine->has_video || engine->has_audio)
     engine->media_duration = gst_discoverer_info_get_duration (info);
-    engine->out_point = engine->media_duration;
-  }
-  // g_print ("Found video %d, audio %d\n", engine->has_video,
-  //     engine->has_audio);
+
+  g_debug ("Found video %d, audio %d\n", engine->has_video, engine->has_audio);
 
   /* If it has video stream, get dimensions */
   if (engine->has_video) {
@@ -272,6 +279,35 @@ is_uri_unfinished_playback (GstEngine * engine, gchar * uri)
   g_free (path);
 
   return position;
+}
+
+/*  Print message tags from elements  */
+static void
+print_tag (const GstTagList * list, const gchar * tag, gpointer unused)
+{
+  gint i, count;
+
+  count = gst_tag_list_get_tag_size (list, tag);
+
+  for (i = 0; i < count; i++) {
+    gchar *str;
+
+    if (gst_tag_get_type (tag) == G_TYPE_STRING) {
+      if (!gst_tag_list_get_string_index (list, tag, i, &str))
+        g_assert_not_reached ();
+    } else {
+      str =
+          g_strdup_value_contents (gst_tag_list_get_value_index (list, tag, i));
+    }
+
+    if (i == 0) {
+      g_print ("  %15s: %s\n", gst_tag_get_nick (tag), str);
+    } else {
+      g_print ("                 : %s\n", str);
+    }
+
+    g_free (str);
+  }
 }
 
 
@@ -358,9 +394,10 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
       remove_uri_unfinished_playback (engine, engine->uri);
 
       if (engine->loop)
-        engine_seek (engine, engine->in_point, TRUE);
+        engine_seek (engine, 0);
 
       break;
+
     case GST_MESSAGE_ERROR:
     {
       /* Parse and share Gst Error */
@@ -379,6 +416,7 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
 
       break;
     }
+
     case GST_MESSAGE_STATE_CHANGED:
     {
       GstState old, new, pending;
@@ -391,7 +429,7 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
           /* Check if URI was left unfinished, if so seek to last position */
           position = is_uri_unfinished_playback (engine, engine->uri);
           if (position != -1) {
-            engine_seek (engine, engine->in_point, TRUE);
+            engine_seek (engine, position);
           }
 
           if (!engine->secret)
@@ -406,17 +444,73 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
 
       break;
     }
+
     case GST_MESSAGE_STEP_DONE:
     {
       engine->prev_done = TRUE;
+      break;
     }
+
     case GST_MESSAGE_SEGMENT_DONE:
     {
       if (engine->loop)
-        engine_seek (engine, engine->in_point, TRUE);
+        engine_seek (engine, 0);
+      break;
     }
+
+    case GST_MESSAGE_TAG:
+    {
+      GstTagList *tags;
+
+      gst_message_parse_tag (msg, &tags);
+      if (tags) {
+        g_print ("%s\n",
+            GST_STR_NULL (GST_ELEMENT_NAME (GST_MESSAGE_SRC (msg))));
+
+        gst_tag_list_foreach (tags, print_tag, NULL);
+        gst_tag_list_free (tags);
+        tags = NULL;
+      }
+      break;
+    }
+
+    case GST_MESSAGE_ASYNC_DONE:
+    {
+      engine->queries_blocked = FALSE;
+
+      break;
+    }
+
     default:
       break;
+  }
+
+  return TRUE;
+}
+
+
+/*             Change pipeline state             */
+gboolean
+change_state (GstEngine * engine, gchar * state)
+{
+  if (!g_strcmp0 (state, "Playing")) {
+    gst_element_set_state (engine->player, GST_STATE_PLAYING);
+    engine->playing = TRUE;
+    engine->queries_blocked = FALSE;
+  } else if (!g_strcmp0 (state, "Paused")) {
+    gst_element_set_state (engine->player, GST_STATE_PAUSED);
+    engine->playing = FALSE;
+    engine->queries_blocked = FALSE;
+  } else if (!g_strcmp0 (state, "Ready")) {
+    gst_element_set_state (engine->player, GST_STATE_READY);
+    engine->playing = FALSE;
+    engine->media_duration = -1;
+    engine->queries_blocked = TRUE;
+  } else if (!g_strcmp0 (state, "Null")) {
+    gst_element_set_state (engine->player, GST_STATE_NULL);
+    engine->playing = FALSE;
+    engine->media_duration = -1;
+    engine->queries_blocked = TRUE;
   }
 
   return TRUE;
@@ -436,9 +530,7 @@ engine_init (GstEngine * engine, GstElement * sink)
   engine->has_audio = FALSE;
   engine->loop = FALSE;
   engine->secret = FALSE;
-
-  engine->in_point = 0;
-  engine->out_point = 0;
+  engine->queries_blocked = TRUE;
 
   engine->media_width = 600;
   engine->media_height = 400;
@@ -472,6 +564,7 @@ engine_load_uri (GstEngine * engine, gchar * uri)
 
   /* Loading a new URI means we haven't started playing this URI yet */
   engine->has_started = FALSE;
+  engine->queries_blocked = TRUE;
 
   g_print ("Loading: %s\n", uri);
 
@@ -500,6 +593,7 @@ engine_play (GstEngine * engine)
   gst_element_set_state (engine->player, GST_STATE_PLAYING);
   engine->has_started = TRUE;
   engine->playing = TRUE;
+  engine->queries_blocked = FALSE;
 
   return TRUE;
 }
@@ -507,24 +601,15 @@ engine_play (GstEngine * engine)
 
 /*            Seek engine to position            */
 gboolean
-engine_seek (GstEngine * engine, gint64 position, gboolean current)
+engine_seek (GstEngine * engine, gint64 position)
 {
   GstFormat fmt = GST_FORMAT_TIME;
 
-  if (current) {
-    if (position > engine->out_point) {
-      engine->in_point = 0;
-      engine->out_point = engine->media_duration;
-    }
+  gst_element_seek_simple (engine->player, fmt,
+      GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_SEGMENT | GST_SEEK_FLAG_ACCURATE,
+      position);
 
-    gst_element_seek (engine->player, 1.0, fmt,
-        GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_SEGMENT | GST_SEEK_FLAG_ACCURATE,
-        GST_SEEK_TYPE_SET, position, GST_SEEK_TYPE_SET, engine->out_point);
-  } else {
-    gst_element_seek (engine->player, 1.0, fmt,
-        GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_SEGMENT | GST_SEEK_FLAG_ACCURATE,
-        GST_SEEK_TYPE_SET, engine->in_point, GST_SEEK_TYPE_SET, position);
-  }
+  engine->queries_blocked = TRUE;
 
   return TRUE;
 }
@@ -536,6 +621,7 @@ engine_stop (GstEngine * engine)
 {
   gst_element_set_state (engine->player, GST_STATE_READY);
   engine->playing = FALSE;
+  engine->queries_blocked = TRUE;
 
   return TRUE;
 }
@@ -594,6 +680,8 @@ frame_stepping (GstEngine * engine, gboolean foward)
     fmt = GST_FORMAT_BUFFERS;
     gst_element_send_event (engine->player,
         gst_event_new_step (fmt, 1, 1.0, TRUE, FALSE));
+
+    engine->queries_blocked = TRUE;
   }
 
   return FALSE;
@@ -650,33 +738,65 @@ query_position (GstEngine * engine)
 }
 
 
-/*             Change pipeline state             */
+/*                 Set subtitle file             */
 gboolean
-change_state (GstEngine * engine, gchar * state)
+set_subtitle_uri (GstEngine * engine, gchar * suburi)
 {
-  if (!g_strcmp0 (state, "Playing")) {
-    gst_element_set_state (engine->player, GST_STATE_PLAYING);
-    engine->playing = TRUE;
-  } else if (!g_strcmp0 (state, "Paused")) {
-    gst_element_set_state (engine->player, GST_STATE_PAUSED);
-    engine->playing = FALSE;
-  } else if (!g_strcmp0 (state, "Ready")) {
-    gst_element_set_state (engine->player, GST_STATE_READY);
-    engine->playing = FALSE;
-    engine->media_duration = -1;
-    engine->in_point = 0;
-    engine->out_point = 0;
-  } else if (!g_strcmp0 (state, "Null")) {
-    gst_element_set_state (engine->player, GST_STATE_NULL);
-    engine->playing = FALSE;
-    engine->media_duration = -1;
-    engine->in_point = 0;
-    engine->out_point = 0;
+  g_print ("Loading subtitles: %s\n");
+  g_object_set (G_OBJECT (engine->player), "suburi", suburi, NULL);
+}
+
+/*                  Toggle streams               */
+gboolean
+toggle_streams (GstEngine * engine, gboolean video_stream)
+{
+  gint current;
+  gint streams;
+  gchar *n;
+  gchar *c;
+
+  if (video_stream) {
+    n = "n-video";
+    c = "current-video";
+  } else {
+    n = "n-audio";
+    c = "current-audio";
   }
+
+  g_object_get (G_OBJECT (engine->player), n, &streams, NULL);
+  g_object_get (G_OBJECT (engine->player), c, &current, NULL);
+
+  if (current < (streams - 1)) {
+    current++;
+  } else {
+    current = 0;
+  }
+
+  g_object_set (G_OBJECT (engine->player), c, current, NULL);
 
   return TRUE;
 }
 
+/*               Toggle subtitles                */
+gboolean
+toggle_subtitles (GstEngine * engine)
+{
+  gint flags;
+  gboolean sub_state;
+
+  g_object_get (G_OBJECT (engine->player), "flags", &flags, NULL);
+  sub_state = flags & (1 << 2);
+
+  if (sub_state) {
+    flags &= ~(1 << 2);         //GST_PLAY_FLAG_TEXT off
+  } else {
+    flags |= (1 << 2);          //GST_PLAY_FLAG_TEXT on
+  }
+
+  g_object_set (G_OBJECT (engine->player), "flags", flags, NULL);
+
+  return TRUE;
+}
 
 /*          Update duration of URI streams       */
 gboolean
@@ -689,7 +809,6 @@ update_media_duration (GstEngine * engine)
           &engine->media_duration)) {
     if (engine->media_duration != -1 && fmt == GST_FORMAT_TIME) {
       success = TRUE;
-      engine->out_point = engine->media_duration;
     } else {
       g_debug ("Could not get media's duration\n");
       success = FALSE;

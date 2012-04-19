@@ -1,9 +1,12 @@
 icons_DATA = \
-    media-actions-pause.png \
-    media-actions-start.png \
-    media-actions-segment-point.png \
-    audio-volume-low.png \
+    audio-stream-toggle.png \
     audio-volume-high.png \
+    audio-volume-low.png \
+    media-actions-pause.png \
+    media-actions-segment-point.png \
+    media-actions-start.png \
+    subtitle-toggle.png \
+    video-stream-toggle.png \
     vid-panel.png
 iconsdir = $(datadir)/snappy
 
