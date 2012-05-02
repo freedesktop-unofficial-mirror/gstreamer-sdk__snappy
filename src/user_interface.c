@@ -74,11 +74,6 @@ event_cb (ClutterStage * stage, ClutterEvent * event, UserInterface * ui)
     {
       /* Clutter key codes based on */
       /* http://cgit.freedesktop.org/xorg/proto/x11proto/plain/keysymdef.h */
-
-      ClutterVertex center = { 0, };
-      ClutterAnimation *animation = NULL;
-
-      center.x - clutter_actor_get_width (ui->texture) / 2;
       guint keyval = clutter_event_get_key_symbol (event);
       switch (keyval) {
         case CLUTTER_q:
@@ -254,12 +249,19 @@ event_cb (ClutterStage * stage, ClutterEvent * event, UserInterface * ui)
 
         case CLUTTER_numbersign:
         case CLUTTER_underscore:
+        case CLUTTER_j:
         {
-          // cycle through available audio/video streams
-          gboolean video_stream;
+          // cycle through available audio/text/video streams
+          guint streamid;
 
-          video_stream = (keyval == CLUTTER_underscore);
-          toggle_streams (ui->engine, video_stream);
+          if (keyval == CLUTTER_numbersign)
+            streamid = STREAM_AUDIO;
+          else if (keyval == CLUTTER_j)
+            streamid = STREAM_TEXT;
+          else if (keyval == CLUTTER_underscore)
+            streamid = STREAM_VIDEO;
+
+          cycle_streams (ui->engine, streamid);
 
           handled = TRUE;
           break;
@@ -332,14 +334,14 @@ event_cb (ClutterStage * stage, ClutterEvent * event, UserInterface * ui)
             show_controls (ui, FALSE);
           }
 
+        } else if (actor == ui->audio_stream_toggle) {
+          cycle_streams (ui->engine, STREAM_AUDIO);
+
         } else if (actor == ui->subtitle_toggle) {
           toggle_subtitles (ui->engine);
 
         } else if (actor == ui->video_stream_toggle) {
-          toggle_streams (ui->engine, TRUE);
-
-        } else if (actor == ui->audio_stream_toggle) {
-          toggle_streams (ui->engine, FALSE);
+          cycle_streams (ui->engine, STREAM_VIDEO);
         }
       }
 
@@ -364,24 +366,24 @@ static void
 load_controls (UserInterface * ui)
 {
   // Check icon files exist
-  gchar *vid_panel_png;
+  gchar *vid_panel_png = NULL;
   gchar *icon_files[8];
-  gchar *duration_str;
+  gchar *duration_str = NULL;
   gint c;
   ClutterColor control_color1 = { 0x12, 0x12, 0x12, 0xff };
   ClutterColor control_color2 = { 0xcc, 0xcc, 0xcc, 0xff };
-  ClutterLayoutManager *controls_layout;
-  ClutterLayoutManager *main_box_layout;
-  ClutterLayoutManager *info_box_layout;
-  ClutterLayoutManager *middle_box_layout;
-  ClutterLayoutManager *bottom_box_layout;
-  ClutterLayoutManager *volume_box_layout;
-  ClutterLayoutManager *seek_box_layout;
-  ClutterLayoutManager *vol_int_box_layout;
-  ClutterActor *seek_box;
-  ClutterActor *middle_box;
-  ClutterActor *bottom_box;
-  ClutterActor *vol_int_box;
+  ClutterLayoutManager *controls_layout = NULL;
+  ClutterLayoutManager *main_box_layout = NULL;
+  ClutterLayoutManager *info_box_layout = NULL;
+  ClutterLayoutManager *middle_box_layout = NULL;
+  ClutterLayoutManager *bottom_box_layout = NULL;
+  ClutterLayoutManager *volume_box_layout = NULL;
+  ClutterLayoutManager *seek_box_layout = NULL;
+  ClutterLayoutManager *vol_int_box_layout = NULL;
+  ClutterActor *seek_box = NULL;
+  ClutterActor *middle_box = NULL;
+  ClutterActor *bottom_box = NULL;
+  ClutterActor *vol_int_box = NULL;
   GError *error = NULL;
 
   vid_panel_png = g_strdup_printf ("%s%s", SNAPPY_DATA_DIR, "/vid-panel.png");
@@ -671,7 +673,7 @@ position_ns_to_str (gint64 nanoseconds)
   gint64 seconds;
   gint hours, minutes;
 
-  seconds = nanoseconds / NANOSEC;
+  seconds = nanoseconds / GST_SECOND;
   hours = seconds / SEC_IN_HOUR;
   seconds = seconds - (hours * SEC_IN_HOUR);
   minutes = seconds / SEC_IN_MIN;
@@ -689,10 +691,11 @@ progress_timing (UserInterface * ui)
   if (ui->progress_id != -1)
     g_source_remove (ui->progress_id);
 
-  duration_ns = ui->engine->media_duration / MILISEC;
-  timeout_ms = duration_ns / ui->seek_width;
-
-  ui->progress_id = g_timeout_add (timeout_ms, progress_update_seekbar, ui);
+  duration_ns = ui->engine->media_duration / GST_MSECOND;
+  if (duration_ns > 0) {
+    timeout_ms = MAX (250, duration_ns / ui->seek_width);
+    ui->progress_id = g_timeout_add (timeout_ms, progress_update_seekbar, ui);
+  }
 }
 
 static gboolean
@@ -749,23 +752,8 @@ rotate_video (UserInterface * ui)
   angle += 90;
   if (angle == 360)
     angle = 0;
-  clutter_actor_set_rotation (ui->texture, CLUTTER_Z_AXIS, angle, 0, 0, 0);
-
-  if (angle == 90 || angle == 270) {
-    ui->rotated = TRUE;
-
-    if (!ui->fullscreen) {
-      clutter_actor_set_width (ui->stage, ui->media_height);
-      clutter_actor_set_height (ui->stage, ui->media_width);
-    }
-  } else {
-    ui->rotated = FALSE;
-
-    if (!ui->fullscreen) {
-      clutter_actor_set_width (ui->stage, ui->media_width);
-      clutter_actor_set_height (ui->stage, ui->media_height);
-    }
-  }
+  clutter_actor_set_z_rotation_from_gravity (ui->texture, angle,
+      CLUTTER_GRAVITY_CENTER);
 
   size_change (CLUTTER_STAGE (ui->stage), NULL, 0, ui);
 }
@@ -795,12 +783,7 @@ size_change (ClutterStage * stage,
   new_height = stage_height;
 
   if (media_height > 0.0f && media_width > 0.0f) {
-    /* if we're rotated, the media_width and media_height are swapped */
-    if (ui->rotated) {
-      media_ar = media_height / media_width;
-    } else {
-      media_ar = media_width / media_height;
-    }
+    media_ar = media_width / media_height;
 
     /* calculate new width and height
      * note: when we're done, new_width/new_height should equal media_ar */
@@ -927,7 +910,7 @@ update_controls_size (UserInterface * ui)
   clutter_text_set_font_name (CLUTTER_TEXT (ui->control_title), font_name);
   text_width = clutter_actor_get_width (CLUTTER_ACTOR (ui->control_title));
 
-  ui->seek_width = 12 +                         // accomodate volume_box spacing
+  ui->seek_width = 12 +         // accomodate volume_box spacing
       (ctl_width * MAIN_BOX_W - icon_size) * SEEK_WIDTH_RATIO -
       2.0f * SEEK_BORDER;
   ui->seek_height =
@@ -1064,8 +1047,6 @@ interface_start (UserInterface * ui, gchar * uri)
   ui->title_length = TITLE_LENGTH;
   ui->duration_str = position_ns_to_str (ui->engine->media_duration);
 
-  ui->rotated = FALSE;
-
   clutter_stage_set_color (CLUTTER_STAGE (ui->stage), &stage_color);
   clutter_stage_set_minimum_size (CLUTTER_STAGE (ui->stage),
       ui->stage_width, ui->stage_height);
@@ -1078,19 +1059,23 @@ interface_start (UserInterface * ui, gchar * uri)
   if (ui->fullscreen) {
     clutter_stage_set_fullscreen (CLUTTER_STAGE (ui->stage), TRUE);
   }
+
   // Controls
   load_controls (ui);
 
   // Add video texture and control UI to stage
-  clutter_container_add (CLUTTER_CONTAINER (ui->stage), ui->texture,
-      ui->control_box, NULL);
+  clutter_container_add (CLUTTER_CONTAINER (ui->stage), ui->texture, NULL);
+  if (!ui->hide) {
+    clutter_container_add (CLUTTER_CONTAINER (ui->stage), ui->control_box,
+        NULL);
+  }
   clutter_actor_add_constraint (ui->texture,
       clutter_align_constraint_new (ui->stage, CLUTTER_ALIGN_X_AXIS, 0.5));
   clutter_actor_add_constraint (ui->texture,
       clutter_align_constraint_new (ui->stage, CLUTTER_ALIGN_Y_AXIS, 0.5));
 
   clutter_stage_hide_cursor (CLUTTER_STAGE (ui->stage));
-  clutter_actor_animate (ui->control_box, CLUTTER_EASE_OUT_QUINT, SECOND,
+  clutter_actor_animate (ui->control_box, CLUTTER_EASE_OUT_QUINT, GST_USECOND,
       "opacity", 0, NULL);
 
   g_signal_connect (CLUTTER_STAGE (ui->stage), "allocation-changed",
@@ -1103,9 +1088,10 @@ interface_start (UserInterface * ui, gchar * uri)
   ui->screensaver = screensaver_new (CLUTTER_STAGE (ui->stage));
   screensaver_enable (ui->screensaver, FALSE);
 
-  g_timeout_add (SECOND, progress_update_text, ui);
+  g_timeout_add (GST_USECOND, progress_update_text, ui);
 
-  clutter_actor_show (ui->stage);
+  if (!ui->blind)
+    clutter_actor_show (ui->stage);
 }
 
 gboolean

@@ -57,9 +57,6 @@
 
 #define TITLE_LENGTH 40
 
-#define SECOND 1000
-#define NANOSEC 1000000000
-#define MILISEC 1000000
 #define SEC_IN_HOUR 3600
 #define SEC_IN_MIN 60
 
@@ -67,13 +64,19 @@
 
 G_BEGIN_DECLS
 
+enum
+{
+  STREAM_AUDIO,
+  STREAM_TEXT,
+  STREAM_VIDEO
+};
+
 typedef struct _UserInterface UserInterface;
 
 struct _UserInterface
 {
   gboolean controls_showing, keep_showing_controls;
-  gboolean fullscreen, penalty_box_active;
-  gboolean rotated;
+  gboolean blind, fullscreen, hide, penalty_box_active, tags;
 
   gint title_length, controls_timeout, progress_id;
   guint media_width, media_height;
