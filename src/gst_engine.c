@@ -59,6 +59,7 @@ gint64 is_uri_unfinished_playback (GstEngine * engine, gchar * uri);
 static void print_tag (const GstTagList * list, const gchar * tag,
     gpointer unused);
 void remove_uri_unfinished_playback (GstEngine * engine, gchar * uri);
+void stream_done (GstEngine * engine, UserInterface *ui);
 
 /* -------------------- static functions --------------------- */
 
@@ -231,7 +232,7 @@ discover (GstEngine * engine, gchar * uri)
   if (engine->has_video || engine->has_audio)
     engine->media_duration = gst_discoverer_info_get_duration (info);
 
-  g_debug ("Found video %d, audio %d\n", engine->has_video, engine->has_audio);
+  g_debug ("Found video %d, audio %d", engine->has_video, engine->has_audio);
 
   /* If it has video stream, get dimensions */
   if (engine->has_video) {
@@ -356,6 +357,19 @@ remove_uri_unfinished_playback (GstEngine * engine, gchar * uri)
   return;
 }
 
+/*    When Stream or segment is done play next or loop     */
+void stream_done (GstEngine * engine, UserInterface *ui)
+{
+      /* When URI is done or looping remove from unfinished list */
+      remove_uri_unfinished_playback (engine, engine->uri);
+
+      if (engine->loop) {
+        engine_seek (engine, 0, TRUE);
+      } else {
+        interface_play_next_or_prev (ui, TRUE);
+      }
+}
+
 /* -------------------- non-static functions --------------------- */
 
 
@@ -396,37 +410,6 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
   GstEngine *engine = ui->engine;
 
   switch (GST_MESSAGE_TYPE (msg)) {
-    case GST_MESSAGE_EOS:
-    {
-      g_debug ("End-of-stream\n");
-      /* When URI is finished remove from unfinished list */
-      remove_uri_unfinished_playback (engine, engine->uri);
-
-      if (engine->loop)
-        engine_seek (engine, 0);
-
-      break;
-    }
-
-    case GST_MESSAGE_ERROR:
-    {
-      /* Parse and share Gst Error */
-      gchar *debug = NULL;
-      GError *err = NULL;
-
-      gst_message_parse_error (msg, &err, &debug);
-
-      g_debug ("Error: %s\n", err->message);
-      g_error_free (err);
-
-      if (debug) {
-        g_debug ("Debug details: %s\n", debug);
-        g_free (debug);
-      }
-
-      break;
-    }
-
     case GST_MESSAGE_STATE_CHANGED:
     {
       GstState old, new, pending;
@@ -439,7 +422,7 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
           /* Check if URI was left unfinished, if so seek to last position */
           position = is_uri_unfinished_playback (engine, engine->uri);
           if (position != -1) {
-            engine_seek (engine, position);
+            engine_seek (engine, position, TRUE);
           }
 
           if (!engine->secret)
@@ -452,19 +435,6 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
         }
       }
 
-      break;
-    }
-
-    case GST_MESSAGE_STEP_DONE:
-    {
-      engine->prev_done = TRUE;
-      break;
-    }
-
-    case GST_MESSAGE_SEGMENT_DONE:
-    {
-      if (engine->loop)
-        engine_seek (engine, 0);
       break;
     }
 
@@ -486,9 +456,58 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
       break;
     }
 
+    case GST_MESSAGE_EOS:
+    {
+      g_debug ("End-of-stream");
+      stream_done (engine, ui);
+
+      break;
+    }
+
+    case GST_MESSAGE_SEGMENT_DONE:
+    {
+      g_debug ("Segment-done");
+      stream_done (engine, ui);
+
+      break;
+    }
+
+    case GST_MESSAGE_STEP_DONE:
+    {
+      engine->prev_done = TRUE;
+      break;
+    }
+
     case GST_MESSAGE_ASYNC_DONE:
       engine->queries_blocked = FALSE;
       break;
+
+    case GST_MESSAGE_DURATION:
+    {
+      g_debug ("Gst message duration\n");
+      update_media_duration (engine);
+
+      break;
+    }
+
+    case GST_MESSAGE_ERROR:
+    {
+      /* Parse and share Gst Error */
+      gchar *debug = NULL;
+      GError *err = NULL;
+
+      gst_message_parse_error (msg, &err, &debug);
+
+      g_debug ("Error: %s", err->message);
+      g_error_free (err);
+
+      if (debug) {
+        g_debug ("Debug details: %s", debug);
+        g_free (debug);
+      }
+
+      break;
+    }
 
     default:
       break;
@@ -635,8 +654,13 @@ void
 engine_open_uri (GstEngine * engine, gchar * uri)
 {
   /* Need to set back to Ready state so Playbin2 loads uri */
+  engine->uri = uri;
+
+  g_print ("Open uri: %s\n", uri);
   gst_element_set_state (engine->player, GST_STATE_READY);
   g_object_set (G_OBJECT (engine->player), "uri", uri, NULL);
+
+  discover (engine, uri);
 
   return;
 }
@@ -663,13 +687,20 @@ engine_play (GstEngine * engine)
 
 /*            Seek engine to position            */
 gboolean
-engine_seek (GstEngine * engine, gint64 position)
+engine_seek (GstEngine * engine, gint64 position, gboolean accurate)
 {
   gboolean ok;
   GstFormat fmt = GST_FORMAT_TIME;
+  GstSeekFlags flags;
+
+  if (accurate) {
+    flags = GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_SEGMENT | GST_SEEK_FLAG_ACCURATE;
+  } else {
+    flags = GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_SEGMENT | GST_SEEK_FLAG_KEY_UNIT;
+  }
 
   ok = gst_element_seek_simple (engine->player, fmt,
-      GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_SEGMENT | GST_SEEK_FLAG_ACCURATE,
+      GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_SEGMENT | GST_SEEK_FLAG_KEY_UNIT,
       position);
 
   engine->queries_blocked = TRUE;
@@ -859,7 +890,7 @@ update_media_duration (GstEngine * engine)
     if (engine->media_duration != -1 && fmt == GST_FORMAT_TIME) {
       success = TRUE;
     } else {
-      g_debug ("Could not get media's duration\n");
+      g_debug ("Could not get media's duration");
       success = FALSE;
     }
   }

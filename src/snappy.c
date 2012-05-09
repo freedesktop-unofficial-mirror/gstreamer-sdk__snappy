@@ -63,14 +63,16 @@ close_down (UserInterface * ui, GstEngine * engine)
 
 
 /*           Process command arguments           */
-gboolean
+GList *
 process_args (int argc, char *argv[],
-    gchar * file_list[], gboolean * blind, gboolean * fullscreen,
-    gboolean * hide, gboolean * loop, gboolean * secret, gchar ** suburi,
-    gboolean * tags, GOptionContext * context)
+    gboolean * blind, gboolean * fullscreen, gboolean * hide, gboolean * loop,
+    gboolean * secret, gchar ** suburi, gboolean * tags,
+    GOptionContext * context)
 {
   gboolean recent = FALSE, version = FALSE;
   guint c, index, pos = 0;
+  GList * uri_list = NULL;
+
   GOptionEntry entries[] = {
     {"blind", 'b', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_NONE, blind,
         "Blind mode", NULL},
@@ -102,7 +104,7 @@ process_args (int argc, char *argv[],
   if (!g_option_context_parse (context, &argc, &argv, &err)) {
     g_print ("Error initializing: %s\n", err->message);
     g_error_free (err);
-    goto quit;
+    return NULL;
   }
 
   /* Recently viewed uris */
@@ -120,32 +122,29 @@ process_args (int argc, char *argv[],
         g_print ("%d: %s \n", c + 1, recent[c]);
     }
 
-    goto quit;
+    return NULL;
   }
 
   /* Show snappy's version */
   if (version) {
     g_print ("snappy version %s\n", VERSION);
-    goto quit;
+    return NULL;
   }
 
   /* Check that at least one URI has been introduced */
-  if (argc < 2) {
+  if (argc > 1) {
+    /* Save uris in the file glist */
+    for (index = 1; index < argc; index++) {
+      g_debug ("Adding file: %s", argv[index]);
+      uri_list = g_list_append (uri_list, clean_uri (argv[index]));
+      pos++;
+    }
+  } else {
+    /* If no files passed by user display help */
     g_print ("%s", g_option_context_get_help (context, TRUE, NULL));
-    goto quit;
   }
 
-  /* Save uris in the file_list array */
-  for (index = 1; index < argc; index++) {
-    file_list[pos] = argv[index];
-    g_debug ("Adding file: %s\n", file_list[pos]);
-    pos++;
-  }
-
-  return TRUE;
-
-quit:
-  return FALSE;
+  return uri_list;
 }
 
 
@@ -163,8 +162,8 @@ main (int argc, char *argv[])
   gint ret = 0;
   guint c, index, pos = 0;
   gchar *uri;
-  gchar *file_list[argc];
   gchar *suburi = NULL;
+  GList *uri_list;
   GOptionContext *context;
 
 #ifdef ENABLE_DBUS
@@ -177,13 +176,14 @@ main (int argc, char *argv[])
   context = g_option_context_new ("<media file> - Play movie files");
 
   /* Process command arguments */
-  ok = process_args (argc, argv, file_list, &blind, &fullscreen, &hide, &loop,
-      &secret, &suburi, &tags, context);
-  if (!ok)
+  uri_list = process_args (argc, argv, &blind, &fullscreen, &hide,
+      &loop, &secret, &suburi, &tags, context);
+  if (uri_list == NULL)
     goto quit;
 
   /* User Interface */
   ui = g_new (UserInterface, 1);
+  ui->uri_list = uri_list;
   ui->blind = blind;
   ui->fullscreen = fullscreen;
   ui->hide = hide;
@@ -213,7 +213,7 @@ main (int argc, char *argv[])
   gst_object_unref (engine->bus);
 
   /* Get uri to load */
-  uri = clean_uri (file_list[0]);
+  uri = g_list_first (uri_list)->data;
 
   /* Load engine and start interface */
   engine_load_uri (engine, uri);
@@ -247,6 +247,7 @@ main (int argc, char *argv[])
 #endif
 
 quit:
+  g_list_free (uri_list);
   g_option_context_free (context);
 
   return ret;

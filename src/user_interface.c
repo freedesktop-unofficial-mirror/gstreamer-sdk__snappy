@@ -194,7 +194,7 @@ event_cb (ClutterStage * stage, ClutterEvent * event, UserInterface * ui)
 
           /* clamp the timestamp to be within the media */
           pos = CLAMP (pos, 0, ui->engine->media_duration);
-          engine_seek (ui->engine, pos);
+          engine_seek (ui->engine, pos, FALSE);
 
           handled = TRUE;
           break;
@@ -267,6 +267,18 @@ event_cb (ClutterStage * stage, ClutterEvent * event, UserInterface * ui)
           break;
         }
 
+        case CLUTTER_less:
+        {
+          interface_play_next_or_prev (ui, FALSE);
+          break;
+        }
+
+        case CLUTTER_greater:
+        {
+          interface_play_next_or_prev (ui, TRUE);
+          break;
+        }
+
         default:
         {
           handled = FALSE;
@@ -302,7 +314,7 @@ event_cb (ClutterStage * stage, ClutterEvent * event, UserInterface * ui)
           }
 
           progress = ui->engine->media_duration * (dist / ui->seek_width);
-          engine_seek (ui->engine, progress);
+          engine_seek (ui->engine, progress, FALSE);
           clutter_actor_set_size (ui->control_seekbar, dist, ui->seek_height);
 
         } else if (actor == ui->vol_int || actor == ui->vol_int_bg) {
@@ -427,7 +439,7 @@ load_controls (UserInterface * ui)
   // Controls background
   ui->control_bg = clutter_texture_new_from_file (vid_panel_png, &error);
   if (!ui->control_bg && error)
-    g_debug ("Clutter error: %s\n", error->message);
+    g_debug ("Clutter error: %s", error->message);
   if (error) {
     g_error_free (error);
     error = NULL;
@@ -459,7 +471,7 @@ load_controls (UserInterface * ui)
   ui->control_play_toggle =
       clutter_texture_new_from_file (ui->pause_png, &error);
   if (!ui->control_play_toggle && error)
-    g_debug ("Clutter error: %s\n", error->message);
+    g_debug ("Clutter error: %s", error->message);
   if (error) {
     g_error_free (error);
     error = NULL;
@@ -540,7 +552,7 @@ load_controls (UserInterface * ui)
   // Controls volume low
   ui->volume_low = clutter_texture_new_from_file (ui->volume_low_png, &error);
   if (!ui->volume_low && error)
-    g_debug ("Clutter error: %s\n", error->message);
+    g_debug ("Clutter error: %s", error->message);
   if (error) {
     g_error_free (error);
     error = NULL;
@@ -568,7 +580,7 @@ load_controls (UserInterface * ui)
   // Controls volume high
   ui->volume_high = clutter_texture_new_from_file (ui->volume_high_png, &error);
   if (!ui->volume_high && error)
-    g_debug ("Clutter error: %s\n", error->message);
+    g_debug ("Clutter error: %s", error->message);
   if (error) {
     g_error_free (error);
     error = NULL;
@@ -601,7 +613,7 @@ load_controls (UserInterface * ui)
   ui->video_stream_toggle = clutter_texture_new_from_file
       (ui->video_stream_toggle_png, &error);
   if (!ui->video_stream_toggle && error)
-    g_debug ("Clutter error: %s\n", error->message);
+    g_debug ("Clutter error: %s", error->message);
   if (error) {
     g_error_free (error);
     error = NULL;
@@ -613,7 +625,7 @@ load_controls (UserInterface * ui)
   ui->audio_stream_toggle = clutter_texture_new_from_file
       (ui->audio_stream_toggle_png, &error);
   if (!ui->audio_stream_toggle && error)
-    g_debug ("Clutter error: %s\n", error->message);
+    g_debug ("Clutter error: %s", error->message);
   if (error) {
     g_error_free (error);
     error = NULL;
@@ -625,7 +637,7 @@ load_controls (UserInterface * ui)
   ui->subtitle_toggle = clutter_texture_new_from_file (ui->subtitle_toggle_png,
       &error);
   if (!ui->subtitle_toggle && error)
-    g_debug ("Clutter error: %s\n", error->message);
+    g_debug ("Clutter error: %s", error->message);
   if (error) {
     g_error_free (error);
     error = NULL;
@@ -702,15 +714,18 @@ static gboolean
 progress_update_text (gpointer data)
 {
   UserInterface *ui = (UserInterface *) data;
+  GstEngine *engine = ui->engine;
 
-  if (ui->controls_showing && !ui->engine->queries_blocked) {
-    gchar *duration_str;
-    gint64 pos;
+  if (ui->controls_showing && !engine->queries_blocked) {
+    if (engine->media_duration == -1) {
+      gchar *duration_str;
+      gint64 pos;
 
-    pos = query_position (ui->engine);
-    duration_str = g_strdup_printf ("   %s/%s", position_ns_to_str (pos),
-        ui->duration_str);
-    clutter_text_set_text (CLUTTER_TEXT (ui->control_pos), duration_str);
+      pos = query_position (engine);
+      duration_str = g_strdup_printf ("   %s/%s", position_ns_to_str (pos),
+          ui->duration_str);
+      clutter_text_set_text (CLUTTER_TEXT (ui->control_pos), duration_str);
+    }
   }
 
   return TRUE;
@@ -722,19 +737,19 @@ progress_update_seekbar (gpointer data)
   UserInterface *ui = (UserInterface *) data;
   GstEngine *engine = ui->engine;
 
-  if (ui->controls_showing && !ui->engine->queries_blocked) {
-    gint64 pos;
-    gfloat progress = 0.0;
-
+  if (ui->controls_showing && !engine->queries_blocked) {
     if (engine->media_duration == -1) {
+      gint64 pos;
+      gfloat progress = 0.0;
+
       update_media_duration (engine);
+
+      pos = query_position (engine);
+      progress = (float) pos / engine->media_duration;
+
+      clutter_actor_set_size (ui->control_seekbar, progress * ui->seek_width,
+          ui->seek_height);
     }
-
-    pos = query_position (engine);
-    progress = (float) pos / engine->media_duration;
-
-    clutter_actor_set_size (ui->control_seekbar, progress * ui->seek_width,
-        ui->seek_height);
   }
 
   return TRUE;
@@ -756,6 +771,8 @@ rotate_video (UserInterface * ui)
       CLUTTER_GRAVITY_CENTER);
 
   size_change (CLUTTER_STAGE (ui->stage), NULL, 0, ui);
+
+  return TRUE;
 }
 
 static void
@@ -795,7 +812,7 @@ size_change (ClutterStage * stage,
       new_width = stage_height * media_ar;
     }
   } else {
-    g_debug ("Warning: not considering texture dimensions %fx%f\n", media_width,
+    g_debug ("Warning: not considering texture dimensions %fx%f", media_width,
         media_height);
   }
 
@@ -1015,6 +1032,44 @@ interface_load_uri (UserInterface * ui, gchar * uri)
     clutter_stage_set_title (CLUTTER_STAGE (ui->stage), ui->filename);
     clutter_text_set_text (CLUTTER_TEXT (ui->control_title), ui->filename);
   }
+
+  ui->duration_str = position_ns_to_str (ui->engine->media_duration);
+  ui->media_width = ui->engine->media_width;
+  ui->media_height = ui->engine->media_height;
+
+  clutter_actor_set_size (CLUTTER_ACTOR (ui->texture), ui->media_width,
+      ui->media_height);
+  size_change (CLUTTER_STAGE (ui->stage), NULL, 0, ui);
+
+  if (!ui->fullscreen)
+    clutter_actor_set_size (CLUTTER_ACTOR (ui->stage), ui->media_width,
+        ui->media_height);
+
+  if (!ui->penalty_box_active)
+    show_controls (ui, TRUE);
+
+  return TRUE;
+}
+
+void
+interface_play_next_or_prev (UserInterface *ui, gboolean next)
+{
+  GList * element;
+  gchar * uri;
+
+  element = g_list_find (ui->uri_list, ui->engine->uri);
+  if (next)
+    element = g_list_next (element);
+  else
+    element = g_list_previous (element);
+
+  if (element != NULL) {
+    uri = element->data;
+
+    engine_open_uri (ui->engine, uri);
+    interface_load_uri (ui, uri);
+    engine_play (ui->engine);
+  }
 }
 
 void
@@ -1031,8 +1086,8 @@ interface_start (UserInterface * ui, gchar * uri)
   ui->media_width = ui->engine->media_width;
   ui->media_height = ui->engine->media_height;
 
-  ui->stage_width = ui->engine->media_width;
-  ui->stage_height = ui->engine->media_height;
+  ui->stage_width = ui->media_width;
+  ui->stage_height = ui->media_height;
   ui->stage = clutter_stage_get_default ();
 
   ui->controls_showing = FALSE;
@@ -1048,8 +1103,8 @@ interface_start (UserInterface * ui, gchar * uri)
   ui->duration_str = position_ns_to_str (ui->engine->media_duration);
 
   clutter_stage_set_color (CLUTTER_STAGE (ui->stage), &stage_color);
-  clutter_stage_set_minimum_size (CLUTTER_STAGE (ui->stage),
-      ui->stage_width, ui->stage_height);
+  clutter_actor_set_size (CLUTTER_ACTOR (ui->stage), ui->media_width,
+                          ui->media_height);
   clutter_stage_set_title (CLUTTER_STAGE (ui->stage), ui->filename);
 
   clutter_actor_set_size (CLUTTER_ACTOR (ui->stage), ui->stage_width,
@@ -1100,4 +1155,6 @@ interface_update_controls (UserInterface * ui)
   progress_update_text (ui);
   progress_update_seekbar (ui);
   update_volume (ui, -1);
+
+  return TRUE;
 }
