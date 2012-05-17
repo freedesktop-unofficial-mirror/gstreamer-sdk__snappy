@@ -27,6 +27,10 @@
 #include "user_interface.h"
 #include "utils.h"
 
+#ifdef CLUTTER_WINDOWING_X11
+#include <clutter/x11/clutter-x11.h>
+#endif
+
 // Declaration of static functions
 static gboolean controls_timeout_cb (gpointer data);
 static gboolean event_cb (ClutterStage * stage, ClutterEvent * event,
@@ -697,15 +701,15 @@ position_ns_to_str (gint64 nanoseconds)
 static void
 progress_timing (UserInterface * ui)
 {
-  gint64 duration_ns;
+  gint64 duration_ms;
   gint64 timeout_ms;
 
   if (ui->progress_id != -1)
     g_source_remove (ui->progress_id);
 
-  duration_ns = ui->engine->media_duration / GST_MSECOND;
-  if (duration_ns > 0) {
-    timeout_ms = MAX (250, duration_ns / ui->seek_width);
+  duration_ms = ui->engine->media_duration / GST_MSECOND;
+  if (duration_ms > 0) {
+    timeout_ms = MAX (250, duration_ms / ui->seek_width);
     ui->progress_id = g_timeout_add (timeout_ms, progress_update_seekbar, ui);
   }
 }
@@ -862,9 +866,70 @@ show_controls (UserInterface * ui, gboolean vis)
   }
 }
 
+#ifdef CLUTTER_WINDOWING_X11
+static void
+toggle_fullscreen_x11 (ClutterStage *stage,
+                       gboolean fullscreen)
+{
+  static gboolean is_fullscreen = FALSE;
+  static float old_width, old_height;
+
+  struct {
+    unsigned long flags;
+    unsigned long functions;
+    unsigned long decorations;
+    long inputMode;
+    unsigned long status;
+  } MWMHints = { 2, 0, 0, 0, 0};
+
+  Display *xdisplay = clutter_x11_get_default_display ();
+  int      xscreen  = clutter_x11_get_default_screen ();
+  Atom     wm_hints = XInternAtom(xdisplay, "_MOTIF_WM_HINTS", True);
+  Window   xwindow  = clutter_x11_get_stage_window (stage);
+
+  if (fullscreen)
+    {
+      int full_width = DisplayWidth (xdisplay, xscreen);
+      int full_height = DisplayHeight (xdisplay, xscreen)+5;
+        /* avoid being detected as fullscreen, workaround for some
+           windowmanagers  */
+      clutter_actor_get_size (CLUTTER_ACTOR (stage), &old_width, &old_height);
+
+      if (wm_hints != None)
+        XChangeProperty (xdisplay, xwindow, wm_hints, wm_hints, 32,
+                         PropModeReplace, (guchar*)&MWMHints,
+                         sizeof(MWMHints)/sizeof(long));
+      clutter_actor_set_size (CLUTTER_ACTOR (stage), full_width, full_height);
+      XMoveResizeWindow (xdisplay, xwindow,
+                         0, 0, full_width, full_height);
+    }
+  else
+    {
+      MWMHints.decorations = 7;
+      if (wm_hints != None )
+        XChangeProperty (xdisplay, xwindow, wm_hints, wm_hints, 32,
+                         PropModeReplace, (guchar*)&MWMHints,
+                         sizeof(MWMHints)/sizeof(long));
+      clutter_stage_set_fullscreen (stage, FALSE);
+      clutter_actor_set_size (CLUTTER_ACTOR (stage), old_width, old_height);
+    }
+}
+#endif
+
 static void
 toggle_fullscreen (UserInterface * ui)
 {
+#ifdef CLUTTER_WINDOWING_X11
+  if (clutter_check_windowing_backend (CLUTTER_WINDOWING_X11))
+    if (ui->fullscreen) {
+      toggle_fullscreen_x11 (CLUTTER_STAGE (ui->stage), FALSE);
+      ui->fullscreen = FALSE;
+    } else {
+      toggle_fullscreen_x11 (CLUTTER_STAGE (ui->stage), TRUE);
+      ui->fullscreen = TRUE;
+    }
+
+#else
   if (ui->fullscreen) {
     clutter_stage_set_fullscreen (CLUTTER_STAGE (ui->stage), FALSE);
     ui->fullscreen = FALSE;
@@ -872,6 +937,7 @@ toggle_fullscreen (UserInterface * ui)
     clutter_stage_set_fullscreen (CLUTTER_STAGE (ui->stage), TRUE);
     ui->fullscreen = TRUE;
   }
+#endif
 }
 
 static void
@@ -1130,8 +1196,8 @@ interface_start (UserInterface * ui, gchar * uri)
       clutter_align_constraint_new (ui->stage, CLUTTER_ALIGN_Y_AXIS, 0.5));
 
   clutter_stage_hide_cursor (CLUTTER_STAGE (ui->stage));
-  clutter_actor_animate (ui->control_box, CLUTTER_EASE_OUT_QUINT, GST_USECOND,
-      "opacity", 0, NULL);
+  clutter_actor_animate (ui->control_box, CLUTTER_EASE_OUT_QUINT,
+      G_TIME_SPAN_MILLISECOND, "opacity", 0, NULL);
 
   g_signal_connect (CLUTTER_STAGE (ui->stage), "allocation-changed",
       G_CALLBACK (size_change), ui);
@@ -1143,7 +1209,8 @@ interface_start (UserInterface * ui, gchar * uri)
   ui->screensaver = screensaver_new (CLUTTER_STAGE (ui->stage));
   screensaver_enable (ui->screensaver, FALSE);
 
-  g_timeout_add (GST_USECOND, progress_update_text, ui);
+  g_timeout_add (G_TIME_SPAN_MILLISECOND, progress_update_text,
+      ui);
 
   if (!ui->blind)
     clutter_actor_show (ui->stage);

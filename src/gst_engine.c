@@ -50,38 +50,19 @@ typedef enum
 } GstPlayFlags;
 
 // Declaration of static functions
-static void write_key_file_to_file (GKeyFile * keyfile, const char *path);
 gboolean add_uri_to_history (gchar * uri);
 gboolean add_uri_unfinished_playback (GstEngine * engine, gchar * uri,
     gint64 position);
 gboolean discover (GstEngine * engine, gchar * uri);
+gboolean is_stream_seakable (GstEngine * engine);
 gint64 is_uri_unfinished_playback (GstEngine * engine, gchar * uri);
 static void print_tag (const GstTagList * list, const gchar * tag,
     gpointer unused);
 void remove_uri_unfinished_playback (GstEngine * engine, gchar * uri);
-void stream_done (GstEngine * engine, UserInterface *ui);
+void stream_done (GstEngine * engine, UserInterface * ui);
+static void write_key_file_to_file (GKeyFile * keyfile, const char *path);
 
 /* -------------------- static functions --------------------- */
-
-static void
-write_key_file_to_file (GKeyFile * keyfile, const char *path)
-{
-  gchar *data, *dir;
-  GError *error = NULL;
-
-  dir = g_path_get_dirname (path);
-  g_mkdir_with_parents (dir, S_IRUSR | S_IWUSR | S_IXUSR);
-  g_free (dir);
-
-  data = g_key_file_to_data (keyfile, NULL, NULL);
-  g_file_set_contents (path, data, strlen (data), &error);
-  if (error != NULL) {
-    g_warning ("Failed to write history file to %s: %s", path, error->message);
-    g_error_free (error);
-  }
-
-  g_free (data);
-}
 
 /*         Add URI to recently viewed list       */
 gboolean
@@ -255,6 +236,25 @@ discover (GstEngine * engine, gchar * uri)
   return TRUE;
 }
 
+/* Query if the current stream is seakable */
+gboolean
+is_stream_seakable (GstEngine * engine)
+{
+  GstQuery *query;
+  gboolean res;
+
+  query = gst_query_new_seeking (GST_FORMAT_TIME);
+  if (gst_element_query (engine->player, query)) {
+    gst_query_parse_seeking (query, NULL, &res, NULL, NULL);
+    GST_DEBUG ("seeking query says the stream is %s seekable",
+        (res) ? "" : " not");
+  } else {
+    GST_DEBUG ("seeking query failed");
+  }
+
+  gst_query_unref (query);
+  return res;
+}
 
 /* Check if URI is in the unfinished playback list */
 gint64
@@ -358,16 +358,37 @@ remove_uri_unfinished_playback (GstEngine * engine, gchar * uri)
 }
 
 /*    When Stream or segment is done play next or loop     */
-void stream_done (GstEngine * engine, UserInterface *ui)
+void
+stream_done (GstEngine * engine, UserInterface * ui)
 {
-      /* When URI is done or looping remove from unfinished list */
-      remove_uri_unfinished_playback (engine, engine->uri);
+  /* When URI is done or looping remove from unfinished list */
+  remove_uri_unfinished_playback (engine, engine->uri);
 
-      if (engine->loop) {
-        engine_seek (engine, 0, TRUE);
-      } else {
-        interface_play_next_or_prev (ui, TRUE);
-      }
+  if (engine->loop) {
+    engine_seek (engine, 0, TRUE);
+  } else {
+    interface_play_next_or_prev (ui, TRUE);
+  }
+}
+
+static void
+write_key_file_to_file (GKeyFile * keyfile, const char *path)
+{
+  gchar *data, *dir;
+  GError *error = NULL;
+
+  dir = g_path_get_dirname (path);
+  g_mkdir_with_parents (dir, S_IRUSR | S_IWUSR | S_IXUSR);
+  g_free (dir);
+
+  data = g_key_file_to_data (keyfile, NULL, NULL);
+  g_file_set_contents (path, data, strlen (data), &error);
+  if (error != NULL) {
+    g_warning ("Failed to write history file to %s: %s", path, error->message);
+    g_error_free (error);
+  }
+
+  g_free (data);
 }
 
 /* -------------------- non-static functions --------------------- */
@@ -694,9 +715,11 @@ engine_seek (GstEngine * engine, gint64 position, gboolean accurate)
   GstSeekFlags flags;
 
   if (accurate) {
-    flags = GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_SEGMENT | GST_SEEK_FLAG_ACCURATE;
+    flags =
+        GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_SEGMENT | GST_SEEK_FLAG_ACCURATE;
   } else {
-    flags = GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_SEGMENT | GST_SEEK_FLAG_KEY_UNIT;
+    flags =
+        GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_SEGMENT | GST_SEEK_FLAG_KEY_UNIT;
   }
 
   ok = gst_element_seek_simple (engine->player, fmt,
