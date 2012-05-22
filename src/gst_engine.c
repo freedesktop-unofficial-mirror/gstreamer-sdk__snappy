@@ -54,6 +54,7 @@ gboolean add_uri_to_history (gchar * uri);
 gboolean add_uri_unfinished_playback (GstEngine * engine, gchar * uri,
     gint64 position);
 gboolean discover (GstEngine * engine, gchar * uri);
+static void handle_element_message (GstEngine * engine, GstMessage * msg);
 gboolean is_stream_seakable (GstEngine * engine);
 gint64 is_uri_unfinished_playback (GstEngine * engine, gchar * uri);
 static void print_tag (const GstTagList * list, const gchar * tag,
@@ -222,8 +223,6 @@ discover (GstEngine * engine, gchar * uri)
     engine->media_width = gst_discoverer_video_info_get_width (v_info);
     engine->media_height = gst_discoverer_video_info_get_height (v_info);
 
-    // g_print ("Found video dimensions: %dx%d\n", engine->media_width,
-    //     engine->media_height);
   } else {
     /* If only audio stream, play visualizations */
     g_object_get (G_OBJECT (engine->player), "flags", &flags, NULL);
@@ -234,6 +233,28 @@ discover (GstEngine * engine, gchar * uri)
   gst_discoverer_info_unref (info);
 
   return TRUE;
+}
+
+/* Handle GST_ELEMENT_MESSAGEs */
+static void
+handle_element_message (GstEngine * engine, GstMessage * msg)
+{
+  GstNavigationMessageType nav_msg_type = gst_navigation_message_get_type (msg);
+
+  switch (nav_msg_type) {
+    case GST_NAVIGATION_MESSAGE_COMMANDS_CHANGED:{
+      g_debug ("Navigation message commands changed");
+      if (is_stream_seakable (engine)) {
+        update_media_duration (engine);
+      }
+
+      break;
+    }
+
+    default:{
+      break;
+    }
+  }
 }
 
 /* Query if the current stream is seakable */
@@ -434,6 +455,8 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
     case GST_MESSAGE_STATE_CHANGED:
     {
       GstState old, new, pending;
+
+      g_debug ("State changed");
       gst_message_parse_state_changed (msg, &old, &new, &pending);
       if (new == GST_STATE_PLAYING) {
         /* If loading file */
@@ -463,6 +486,7 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
     {
       GstTagList *tags;
 
+      g_debug ("Tag received");
       if (ui->tags) {
         gst_message_parse_tag (msg, &tags);
         if (tags) {
@@ -479,7 +503,7 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
 
     case GST_MESSAGE_EOS:
     {
-      g_debug ("End-of-stream");
+      g_debug ("End of stream");
       stream_done (engine, ui);
 
       break;
@@ -487,7 +511,7 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
 
     case GST_MESSAGE_SEGMENT_DONE:
     {
-      g_debug ("Segment-done");
+      g_debug ("Segment done");
       stream_done (engine, ui);
 
       break;
@@ -495,19 +519,27 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
 
     case GST_MESSAGE_STEP_DONE:
     {
+      g_debug ("Step done");
       engine->prev_done = TRUE;
       break;
     }
 
     case GST_MESSAGE_ASYNC_DONE:
+      g_debug ("Async done");
       engine->queries_blocked = FALSE;
       break;
 
     case GST_MESSAGE_DURATION:
     {
-      g_debug ("Gst message duration\n");
+      g_debug ("Message duration received");
       update_media_duration (engine);
 
+      break;
+    }
+
+    case GST_MESSAGE_ELEMENT:
+    {
+      handle_element_message (engine, msg);
       break;
     }
 
@@ -646,6 +678,8 @@ engine_init (GstEngine * engine, GstElement * sink)
   engine->sink = sink;
   g_object_set (G_OBJECT (engine->player), "video-sink", engine->sink, NULL);
   engine->bus = gst_pipeline_get_bus (GST_PIPELINE (engine->player));
+
+  engine->navigation = GST_NAVIGATION (engine->sink);
 
   return TRUE;
 }
