@@ -135,7 +135,7 @@ process_args (int argc, char *argv[],
   if (argc > 1) {
     /* Save uris in the file glist */
     for (index = 1; index < argc; index++) {
-      g_debug ("Adding file: %s", argv[index]);
+      g_print ("Adding file: %s\n", argv[index]);
       uri_list = g_list_append (uri_list, clean_uri (argv[index]));
       pos++;
     }
@@ -163,6 +163,7 @@ main (int argc, char *argv[])
   guint c, index, pos = 0;
   gchar *uri;
   gchar *suburi = NULL;
+  gchar *version_str;
   GList *uri_list;
   GOptionContext *context;
 
@@ -193,9 +194,18 @@ main (int argc, char *argv[])
 
   clutter_gst_init (&argc, &argv);
 
+  version_str = gst_version_string ();
+  GST_DEBUG_CATEGORY_INIT (_snappy_gst_debug, "snappy", 0,
+      "snappy media player");
+  GST_DEBUG ("Initialised %s", version_str);
+
   /* Gstreamer engine */
   engine = g_new (GstEngine, 1);
-  sink = gst_element_factory_make ("cluttersink", "cluttersink");
+  sink = gst_element_factory_make ("autocluttersink", "cluttersink");
+  if (sink == NULL) {
+    GST_DEBUG ("autocluttersink not found, falling back to cluttersink\n");
+    sink = gst_element_factory_make ("cluttersink", "cluttersink");
+  }
   g_object_set (G_OBJECT (sink), "texture", CLUTTER_TEXTURE (video_texture),
       NULL);
 
