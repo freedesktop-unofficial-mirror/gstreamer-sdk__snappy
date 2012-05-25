@@ -188,7 +188,7 @@ discover (GstEngine * engine, gchar * uri)
   /* new GST Discoverer */
   dc = gst_discoverer_new (timeout * GST_SECOND, &error);
   if (G_UNLIKELY (error)) {
-    g_error ("Error in GST Discoverer initializing: %s\n", error->message);
+    GST_WARNING ("Error in GST Discoverer initializing: %s\n", error->message);
     g_error_free (error);
     return FALSE;
   }
@@ -196,7 +196,7 @@ discover (GstEngine * engine, gchar * uri)
   /* Discover URI */
   info = gst_discoverer_discover_uri (dc, uri, &error);
   if (G_UNLIKELY (error)) {
-    g_error ("Error discovering URI: %s\n", error->message);
+    GST_WARNING ("Error discovering URI: %s\n", error->message);
     g_error_free (error);
     return FALSE;
   }
@@ -370,7 +370,7 @@ remove_uri_unfinished_playback (GstEngine * engine, gchar * uri)
   data = g_key_file_to_data (keyfile, NULL, NULL);
   g_file_set_contents (path, data, strlen (data), &error);
   if (error != NULL) {
-    g_warning ("Failed to write history file to %s: %s", path, error->message);
+    GST_WARNING ("Failed to write history file to %s: %s", path, error->message);
     g_error_free (error);
   }
 
@@ -407,7 +407,7 @@ write_key_file_to_file (GKeyFile * keyfile, const char *path)
   data = g_key_file_to_data (keyfile, NULL, NULL);
   g_file_set_contents (path, data, strlen (data), &error);
   if (error != NULL) {
-    g_warning ("Failed to write history file to %s: %s", path, error->message);
+    GST_WARNING ("Failed to write history file to %s: %s", path, error->message);
     g_error_free (error);
   }
 
@@ -671,11 +671,8 @@ engine_init (GstEngine * engine, GstElement * sink)
 
   gchar *version_str;
 
-  version_str = gst_version_string ();
   GST_DEBUG_CATEGORY_INIT (_snappy_gst_debug, "snappy", 0,
       "snappy media player");
-  GST_DEBUG ("Initialised %s", version_str);
-  g_free (version_str);
 
   /* Make playbin2 element */
   engine->player = gst_element_factory_make ("playbin2", "playbin2");
@@ -689,7 +686,8 @@ engine_init (GstEngine * engine, GstElement * sink)
   g_object_set (G_OBJECT (engine->player), "video-sink", engine->sink, NULL);
   engine->bus = gst_pipeline_get_bus (GST_PIPELINE (engine->player));
 
-  engine->navigation = GST_NAVIGATION (engine->sink);
+  engine->navigation = GST_NAVIGATION (gst_bin_get_by_interface (GST_BIN (engine->player),
+                                                                 GST_TYPE_NAVIGATION));
 
   return TRUE;
 }
