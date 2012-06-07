@@ -401,22 +401,36 @@ load_controls (UserInterface * ui)
   ClutterActor *bottom_box = NULL;
   ClutterActor *vol_int_box = NULL;
   GError *error = NULL;
+  gchar *data_dir;
+#ifdef G_OS_WIN32
+  gchar *exe_root;
+#endif
 
-  vid_panel_png = g_build_filename (SNAPPY_DATA_DIR, "vid-panel.png", NULL);
-  ui->play_png = g_build_filename (SNAPPY_DATA_DIR, "media-actions-start.png",
+#ifdef G_OS_WIN32
+  exe_root = g_win32_get_package_installation_directory_of_module(NULL);
+  data_dir = g_build_filename(exe_root, "share", "snappy", NULL);
+  g_free(exe_root);
+#else
+  data_dir = g_strdup(SNAPPY_DATA_DIR);
+#endif
+
+  vid_panel_png = g_build_filename (data_dir, "vid-panel.png", NULL);
+  ui->play_png = g_build_filename (data_dir, "media-actions-start.png",
       NULL);
-  ui->pause_png = g_build_filename (SNAPPY_DATA_DIR, "media-actions-pause.png",
+  ui->pause_png = g_build_filename (data_dir, "media-actions-pause.png",
       NULL);
-  ui->volume_low_png = g_build_filename (SNAPPY_DATA_DIR,
+  ui->volume_low_png = g_build_filename (data_dir,
       "audio-volume-low.png", NULL);
-  ui->volume_high_png = g_build_filename (SNAPPY_DATA_DIR,
+  ui->volume_high_png = g_build_filename (data_dir,
       "audio-volume-high.png", NULL);
-  ui->subtitle_toggle_png = g_build_filename (SNAPPY_DATA_DIR,
+  ui->subtitle_toggle_png = g_build_filename (data_dir,
       "subtitle-toggle.png", NULL);
-  ui->video_stream_toggle_png = g_build_filename (SNAPPY_DATA_DIR,
+  ui->video_stream_toggle_png = g_build_filename (data_dir,
       "video-stream-toggle.png", NULL);
-  ui->audio_stream_toggle_png = g_build_filename (SNAPPY_DATA_DIR,
+  ui->audio_stream_toggle_png = g_build_filename (data_dir,
       "audio-stream-toggle.png", NULL);
+
+  g_free(data_dir);
 
   icon_files[0] = vid_panel_png;
   icon_files[1] = ui->play_png;
