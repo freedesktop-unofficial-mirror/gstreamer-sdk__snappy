@@ -87,13 +87,6 @@ AC_SUBST(GIO_LIBS)
 
 case "$host" in
   *-*-mingw*|*-*-cygwin*)
-  os_win32=yes
-  ;;
-esac
-AM_CONDITIONAL(OS_WIN32, test x$os_win32=xyes)
-
-case "$host" in
-  *-*-mingw*|*-*-cygwin*)
     PKG_CHECK_MODULES(CLUTTER_WIN32, clutter-win32-1.0,
       [AC_DEFINE(HAVE_WIN32, 1, [Define if Clutter Win32 is available.])],
       [])
